@@ -23,7 +23,7 @@ def authenticate(config: dict):
     Given config object, authenticate to Aspace, returning a token (str).
     '''
     try:
-        r = requests.post(config['base_url'] + f'/users/{config["user"]}/login', 
+        r = requests.post(config['base_url'] + f'users/{config["user"]}/login', 
                           params={'password': config['password']})
         r.raise_for_status()
         return r.json().get('session')
