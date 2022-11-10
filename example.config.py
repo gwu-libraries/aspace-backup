@@ -14,5 +14,6 @@ config = {'base_url': BASE_URL,
          'include_unpublished': 'false',
          'include_daos': 'false',
           'numbered_cs': 'false',
-          'base_local_path': ''
+          'base_local_path': '',
+          'log_level': 'DEBUG' # One of DEBUG, INFO, WARNING, ERROR
          }
