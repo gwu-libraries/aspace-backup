@@ -16,6 +16,8 @@ import click
 throttler = Throttler(rate_limit=10)
 
 # Set logging level
+#logger = logging.getLogger(__name__)
+#logger.addHandler(logging.StreamHandler().setLevel(config.get('log_level', 'INFO')))
 logging.basicConfig(level=config.get('log_level', 'INFO'))
 
 def authenticate(config: dict):
@@ -23,7 +25,7 @@ def authenticate(config: dict):
     Given config object, authenticate to Aspace, returning a token (str).
     '''
     try:
-        r = requests.post(config['base_url'] + f'users/{config["user"]}/login', 
+        r = requests.post(config['base_url'] + f'/users/{config["user"]}/login', 
                           params={'password': config['password']})
         r.raise_for_status()
         return r.json().get('session')
@@ -206,6 +208,33 @@ def store_objects(objects: list, paths: list=None):
             with path.with_suffix('.xml').open(mode='w') as f:
                 f.write(obj)
 
+def get_deletes(header: dict, obj_type: str='resources'):
+    '''
+    Retrieves URIs from the delete-feed endpoint of ASpace in order to identify objects that have been deleted.
+    :param header: ASpace authentication header
+    :param obj_type: type of object by which to filter the deleted URIs
+    Returns a list of str of refs to deleted objects (URI's)
+    '''
+    deletes = []
+    last_page = None
+    # Pagination starts with 1
+    this_page = 1
+    while not last_page or this_page <= last_page:
+        response = requests.get(config['base_url'] + '/delete-feed', 
+                                params={'page': this_page}, 
+                                headers=header)
+        try:
+            response.raise_for_status()
+            results = response.json()
+            deletes.extend(results['results'])
+            last_page = results['last_page']
+            this_page += 1
+        except HTTPError:
+            logging.error(f'Error accessing delete-feed on page {this_page} of results.')
+            raise
+    # Return only those deleted object URI's of the specified type
+    return [r for r in deletes if obj_type in r]
+
 def get_resources_runner(resource_ids: list, header: dict):
     '''
     Helper function for running async task with Airflow.
@@ -237,7 +266,7 @@ def get_do_ids(header: dict):
     return [r for r in get_all_ids(header, obj_type='digital_objects')]
 
 @click.command()
-@click.option('--test', help='Set an integer to run a test on a subset of objects.')
+@click.option('--test', type=int, help='Set an integer to run a test on a subset of objects.')
 def main(test: int=0):
     '''
     Main entrypoint for calling from command line.
@@ -262,7 +291,7 @@ def main(test: int=0):
     mets = retrieve_xml(do_ids, make_mets_urls, header)
     # Save objects, excluding errors
     for objs in [resources, dos]:
-        store_objects(objs.filter(lambda x: 'error' not in x))
+        store_objects([obj for obj in objs if 'error' not in obj])
     # Save XML docs
     for docs in [ead, mets]:
         # Exclude errors
@@ -270,7 +299,7 @@ def main(test: int=0):
         # Generate paths: removing the initial part of the URI 
         paths = [d['uri'].replace(config['base_url'], '') for d in docs_to_store]
         # XML is under the "body" key
-        store_objects(docs_to_store.map(lambda x: x['body']), paths)
+        store_objects([doc['body'] for doc in docs_to_store], paths)
 
 if __name__ == '__main__':
     main()
