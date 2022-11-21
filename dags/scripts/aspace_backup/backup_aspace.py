@@ -1,5 +1,6 @@
 import requests
 from requests import HTTPError
+from requests.adapters import HTTPAdapter, Retry
 import asyncio
 import aiohttp
 from asyncio_throttle import Throttler
@@ -10,9 +11,6 @@ import os
 import json
 import logging
 import click
-
-# Throttles async connections
-throttler = Throttler(rate_limit=10)
 
 # Set logging level
 #logger = logging.getLogger(__name__)
@@ -49,7 +47,6 @@ class BaseObjFetch:
         '''
         # Throttled version of the retrieve_obj function
         self.retrieve_obj = partial(BaseObjFetch.retrieve_obj, throttler=throttler)
-
       
     def get_all_ids(self, modified_since: int=None):
         '''
@@ -68,7 +65,7 @@ class BaseObjFetch:
             for id_ in r.json():
                 yield id_
         except HTTPError:
-            logging.error(f'Error requesting objects of type {obj_type}: {r.text}')
+            logging.error(f'Error requesting objects of type {self.obj_type}: {r.text}')
     
     def make_urls(self):
         '''
@@ -123,10 +120,14 @@ class BaseObjFetch:
         :param url_func: function to return the URL's for the XML docs from the list of ID's. 
         Returns a list of dicts containing either XML strs or error messages
         '''
+        # Setting retries to avoid ConnectionError with ASpace API
+        session = requests.Session()
+        retries = Retry(total=5, backoff_factor=0.1)
+        session.mount('https://', HTTPAdapter(max_retries=retries))
         docs = []
         urls, params = url_func()
         for url in urls:
-            r = requests.get(url, params=params, headers=self.header)
+            r = session.get(url, params=params, headers=self.header)
             try:
                 r.raise_for_status()
                 docs.append({'uri': url,
@@ -167,7 +168,7 @@ class ObjectFetch(BaseObjFetch):
     '''
     Subclass for getting ASpace object records (resources, digital objects, etc.) and XML docs.
     '''
-    def __init__(self, config: dict, header: dict, throttler, obj_type: str='resources'):
+    def __init__(self, config: dict, header: dict, obj_type: str='resources'):
         '''
         :param config: dict of ASpace URL components
         :param header: ASpace authentication header
@@ -177,8 +178,10 @@ class ObjectFetch(BaseObjFetch):
         self.config = config
         self.header = header
         self.obj_type = obj_type
+        # Throttles async connections
+        self.throttler = Throttler(rate_limit=10)
         # Initialize base class with throttler
-        super().__init__(throttler)
+        super().__init__(self.throttler)
     
     def make_ead_urls(self):
         '''
@@ -200,12 +203,13 @@ class ObjectFetch(BaseObjFetch):
             for id_ in self.ids]
         return urls, None
     
-    def get_object_ids(self, test: int=0):
+    def get_object_ids(self, modified_since: int=None, test: int=0):
         '''
         Helper function for calling get_all_ids
+        :param modified_since: an int representing a UNIX timestamp: mapped to the system_mtime field in the ASpace records
         :param test: optional number to limit number of results, for testing
         '''
-        self.ids = [r for r in self.get_all_ids()]
+        self.ids = [r for r in self.get_all_ids(modified_since=modified_since)]
         if test:
             self.ids = self.ids[:test]
         return self
@@ -281,7 +285,8 @@ class ObjectFetch(BaseObjFetch):
 
 @click.command()
 @click.option('--test', type=int, help='Set an integer to run a test on a subset of objects.')
-def main(test: int=0):
+@click.option('--object_type', type=str, help='Run only for the specified type of ASpace object: either resources or digital_objects')
+def main(test: int=0, object_type=None):
     '''
     Main entrypoint for calling from command line.
     :param test: Assign an integer greater than 0 to test on a subset of documents
@@ -293,25 +298,33 @@ def main(test: int=0):
     # Get auth header
     header = create_auth_header(authenticate(config))
     # for resource records
-    rf = ObjectFetch(config=config, header=header, throttler=throttler)
-    logging.debug('Getting resource IDs and objects')
-    rf.get_object_ids(test).get_objects()
-    logging.debug('Getting EAD docs')
-    rf.get_xml_docs(rf.make_ead_urls)
-    # for digital objects
-    do = ObjectFetch(config=config, header=header, obj_type='digital_objects', throttler=throttler)
-    logging.debug('Getting digital object IDs and objects')
-    do.get_object_ids(test).get_objects()
-    logging.debug('Getting METS docs')
-    do.get_xml_docs(do.make_mets_urls)
-    logging.debug('Saving objects and documents')
-    for obj_type in [rf, do]:
-        obj_type.store_objects([obj for obj in obj_type.objects if 'error' not in obj])
-        docs_to_store = [d for d in obj_type.docs if 'error' not in d]
+    if (not object_type) or (object_type == 'resources'):
+        rf = ObjectFetch(config=config, header=header)
+        logging.info('Getting resource IDs and objects')
+        rf.get_object_ids(test).get_objects()
+        logging.info('Getting EAD docs')
+        rf.get_xml_docs(rf.make_ead_urls)
+        logging.info('Saving objects and documents')
+        rf.store_objects([obj for obj in rf.objects if 'error' not in obj])
+        docs_to_store = [d for d in rf.docs if 'error' not in d]
         # Generate paths: removing the initial part of the URI 
         paths = [d['uri'].replace(config['base_url'], '') for d in docs_to_store]
         # XML is under the "body" key
-        obj_type.store_objects([doc['body'] for doc in docs_to_store], paths)
+        rf.store_objects([doc['body'] for doc in docs_to_store], paths)
+    # for digital objects
+    if (not object_type) or (object_type == 'digital_objects'):
+        do = ObjectFetch(config=config, header=header, obj_type='digital_objects')
+        logging.info('Getting digital object IDs and objects')
+        do.get_object_ids(test).get_objects()
+        logging.info('Getting METS docs')
+        do.get_xml_docs(do.make_mets_urls)
+        logging.info('Saving objects and documents')
+        do.store_objects([obj for obj in do.objects if 'error' not in obj])
+        docs_to_store = [d for d in do.docs if 'error' not in d]
+        # Generate paths: removing the initial part of the URI 
+        paths = [d['uri'].replace(config['base_url'], '') for d in docs_to_store]
+        # XML is under the "body" key
+        do.store_objects([doc['body'] for doc in docs_to_store], paths)
 
 if __name__ == '__main__':
     main()
