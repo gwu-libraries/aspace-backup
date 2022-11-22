@@ -23,12 +23,12 @@ This implementation uses Airflow 2.4.3 in Dockerized form with Python 3.8.
    AIRFLOW_UID=XXXXXXX
    ```
    where `XXXXXXX` is the result of running `id -u` at the command line.
-
-2. Run `docker compose up airflow-init` to initialize the Airflow database.
-3. The DAG file is `dags/aspace_backup_dag.py`. In this file, you can set the `start_date` and `schedule` parameters as necessary. The `start_date` should be the date of the initial run of the DAG. The `schedule` param takes a cron-formatted string. 
-4. Run `docker compose up -d` to start the containers.
-5. The initial run of the DAG will perform a full backup. Subsequent backups will retrieve only those ASpace objects modified since the timestamp of the last successful DAG run.
-6. Manual backups can be triggered from the Airflow UI.
-7. To view the UI (from a remote host), use port forwarding from your local machine to listen on port 8080: e.g., ` ssh -L 8080:localhost:8080 username@remotehost`-- where `username` is your username on the remote host, and `remotehost` is the host running Airflow.
+2. Create new directories in the repo called `logs` and `plugins`. (These are mapped into the Airflow containers.)
+3. Run `docker compose up airflow-init` to initialize the Airflow database.
+4. The DAG file is `dags/aspace_backup_dag.py`. In this file, you can set the `start_date` and `schedule` parameters as necessary. The `start_date` should be the date of the initial run of the DAG. The `schedule` param takes a cron-formatted string. 
+5. Run `docker compose up -d` to start the containers.
+6. The initial run of the DAG will perform a full backup. Subsequent backups will retrieve only those ASpace objects modified since the timestamp of the last successful DAG run.
+7. Manual backups can be triggered from the Airflow UI.
+8. To view the UI (from a remote host), use port forwarding from your local machine to listen on port 8080: e.g., ` ssh -L 8080:localhost:8080 username@remotehost`-- where `username` is your username on the remote host, and `remotehost` is the host running Airflow.
 
 For more information on running Airflow in a Docker environment, see [the Airflow docs](https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html).
